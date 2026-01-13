@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TSB Arena</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: 'Arial Black', sans-serif;
+        }
+
+        /* THE HUD */
+        #hud {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            z-index: 10;
+        }
+
+        .bottom-ui {
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .hp-container {
+            width: 500px;
+            height: 25px;
+            background: rgba(0,0,0,0.6);
+            border: 2px solid #fff;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        #hp-fill {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, #ff4d4d, #ff0000);
+            transition: width 0.3s;
+        }
+
+        .skill-bar {
+            display: flex;
+            gap: 15px;
+        }
+
+        .skill {
+            width: 65px;
+            height: 65px;
+            background: rgba(0,0,0,0.8);
+            border: 2px solid cyan;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+            font-size: 11px;
+            text-align: center;
+            text-shadow: 1px 1px 2px #000;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 6px;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            display: none; /* Hidden by default */
+        }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+    <div id="hud">
+        <div class="top-ui"></div>
+        <div class="bottom-ui">
+            <div class="hp-container"><div id="hp-fill"></div></div>
+            <div class="skill-bar">
+                <div class="skill" style="border-color: cyan;">Q<br>DASH</div>
+                <div class="skill" style="border-color: #ffaa00;">LMB<br>PUNCH</div>
+                <div class="skill" style="border-color: #ff00ff;">G<br>ULT</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let scene, camera, renderer, myPlayer, loader;
+        let otherPlayers = {}, keys = {};
+
+        let targetCameraAngle = 0;
+        let cameraPitch = 0.3;
+        let isRightMouseDown = false;
+
+        let cameraDistance = 15;
+        const minDistance = 0.1;
+        const maxDistance = 40;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            loader = new THREE.GLTFLoader();
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // MOUSE LISTENERS
+            window.addEventListener('mousedown', (e) => { if (e.button === 2) isRightMouseDown = true; });
+            window.addEventListener('mouseup', (e) => { if (e.button === 2) isRightMouseDown = false; });
+            window.addEventListener('mousemove', (e) => {
+                if (isRightMouseDown) {
+                    targetCameraAngle -= e.movementX * 0.005;
+                    cameraPitch += e.movementY * 0.005;
+                    cameraPitch = Math.max(0.1, Math.min(Math.PI / 2.2, cameraPitch));
+                }
+            });
+
+            // SCROLL LISTENER (Moved outside mousemove)
+            window.addEventListener('wheel', (e) => {
+                cameraDistance += e.deltaY * 0.02;
+                cameraDistance = Math.max(minDistance, Math.min(maxDistance, cameraDistance));
+            });
+
+            window.addEventListener('contextmenu', e => e.preventDefault());
+
+            // Lighting & Floor
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const sun = new THREE.DirectionalLight(0xffffff, 1);
+            sun.position.set(5, 10, 7.5);
+            scene.add(sun);
+
+            const floor = new THREE.Mesh(new THREE.CylinderGeometry(50, 52, 2, 8), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+            floor.position.y = -1;
+            scene.add(floor);
+
+            myPlayer = createCharacter();
+
+            window.onkeydown = e => keys[e.key.toLowerCase()] = true;
+            window.onkeyup = e => keys[e.key.toLowerCase()] = false;
+            window.onmousedown = (e) => { if (e.button === 0) socket.emit('attack'); };
+
+            setupNetwork();
+            animate();
+        }
+
+        function createCharacter() {
+            const group = new THREE.Group();
+            const url = "https://raw.githack.com/ditohdez/TSBCharacter/main/Pikachu%20Blender.glb";
+
+            loader.load(url, (gltf) => {
+                const model = gltf.scene;
+                model.rotation.y = Math.PI;
+                model.scale.set(2, 2, 2);
+                group.add(model);
+                scene.add(group);
+
+                // Simple shadow circle
+                const shadowGeo = new THREE.CircleGeometry(1, 32);
+                const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4 });
+                const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+                shadow.rotation.x = -Math.PI / 2; // Lay flat
+                shadow.position.y = -0.9; // Just above the floor
+                group.add(shadow);
+            });
+            return group;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (!myPlayer || !myPlayer.position) return;
+
+            let moved = false;
+            let moveX = 0, moveZ = 0;
+
+            // 1. INPUT HANDLING
+            if (keys['w']) { moveZ -= 0.2; moved = true; }
+            if (keys['s']) { moveZ += 0.2; moved = true; }
+            if (keys['a']) { moveX -= 0.2; moved = true; }
+            if (keys['d']) { moveX += 0.2; moved = true; }
+
+            if (moved) {
+                // MOVE RELATIVE TO CAMERA
+                const combinedX = moveX * Math.cos(targetCameraAngle) + moveZ * Math.sin(targetCameraAngle);
+                const combinedZ = moveZ * Math.cos(targetCameraAngle) - moveX * Math.sin(targetCameraAngle);
+
+                myPlayer.position.x += combinedX;
+                myPlayer.position.z += combinedZ;
+
+                const direction = Math.atan2(combinedX, combinedZ);
+                myPlayer.rotation.y = direction + Math.PI;
+
+                socket.emit('playerMovement', { x: myPlayer.position.x, y: myPlayer.position.y, z: myPlayer.position.z, ry: myPlayer.rotation.y });
+            }
+
+            // 2. CAMERA CALCULATION
+            const isFirstPerson = cameraDistance < 2;
+            myPlayer.visible = !isFirstPerson;
+
+            const camX = myPlayer.position.x + cameraDistance * Math.sin(targetCameraAngle) * Math.cos(cameraPitch);
+            const camY = myPlayer.position.y + cameraDistance * Math.sin(cameraPitch) + (isFirstPerson ? 1.5 : 2);
+            const camZ = myPlayer.position.z + cameraDistance * Math.cos(targetCameraAngle) * Math.cos(cameraPitch);
+
+            const targetPos = new THREE.Vector3(camX, camY, camZ);
+            const lerpSpeed = isFirstPerson ? 0.5 : 0.1;
+
+            camera.position.lerp(targetPos, lerpSpeed);
+            camera.lookAt(myPlayer.position.x, myPlayer.position.y + 1.5, myPlayer.position.z);
+
+            renderer.render(scene, camera);
+        }
+
+        function setupNetwork() {
+            socket.on('playerMoved', d => {
+                if (d.id === socket.id) {
+                    myPlayer.position.y = d.data.y; // This makes YOUR Pikachu fall on YOUR screen
+                } else if (otherPlayers[d.id]) {
+                    otherPlayers[d.id].position.set(d.data.x, d.data.y, d.data.z);
+                    otherPlayers[d.id].rotation.y = d.data.ry;
+                }
+            });
+        }
+
+        init();
+    </script>
+</body>
+</html>
