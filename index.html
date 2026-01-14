@@ -1,17 +1,16 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>TSB Arena</title>
+    <title>3D Physics: Kinematics Module</title>
     <style>
         body {
             margin: 0;
             overflow: hidden;
             background: #000;
-            font-family: 'Arial Black', sans-serif;
+            font-family: sans-serif;
         }
 
-        /* THE HUD */
-        #hud {
+        #workspace_metrics {
             position: absolute;
             width: 100%;
             height: 100%;
@@ -22,94 +21,76 @@
             z-index: 10;
         }
 
-        .bottom-ui {
+        .data-footer {
             padding: 40px;
             display: flex;
             flex-direction: column;
             align-items: center;
         }
 
-        .hp-container {
+        .integrity-bar {
             width: 500px;
-            height: 25px;
-            background: rgba(0,0,0,0.6);
-            border: 2px solid #fff;
-            border-radius: 15px;
+            height: 15px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid #444;
+            border-radius: 5px;
             overflow: hidden;
             margin-bottom: 20px;
         }
 
-        #hp-fill {
+        #integrity-fill {
             width: 100%;
             height: 100%;
-            background: linear-gradient(90deg, #ff4d4d, #ff0000);
+            background: #00ff88;
             transition: width 0.3s;
         }
 
-        .skill-bar {
+        .module-group {
             display: flex;
-            gap: 15px;
+            gap: 10px;
         }
 
-        .skill {
-            width: 65px;
-            height: 65px;
-            background: rgba(0,0,0,0.8);
-            border: 2px solid cyan;
-            color: white;
+        .module-node {
+            width: 50px;
+            height: 50px;
+            background: rgba(20,20,20,0.9);
+            border: 1px solid #555;
+            color: #aaa;
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: 12px;
-            font-size: 11px;
-            text-align: center;
-            text-shadow: 1px 1px 2px #000;
-        }
-        #crosshair {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 6px;
-            height: 6px;
-            background: rgba(255, 255, 255, 0.8);
-            border-radius: 50%;
-            transform: translate(-50%, -50%);
-            pointer-events: none;
-            display: none; /* Hidden by default */
+            border-radius: 4px;
+            font-size: 10px;
         }
     </style>
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
 </head>
 <body>
-    <div id="hud">
-        <div class="top-ui"></div>
-        <div class="bottom-ui">
-            <div class="hp-container"><div id="hp-fill"></div></div>
-            <div class="skill-bar">
-                <div class="skill" style="border-color: cyan;">Q<br>DASH</div>
-                <div class="skill" style="border-color: #ffaa00;">LMB<br>PUNCH</div>
-                <div class="skill" style="border-color: #ff00ff;">G<br>ULT</div>
+    <div id="workspace_metrics">
+        <div></div>
+        <div class="data-footer">
+            <div class="integrity-bar"><div id="integrity-fill"></div></div>
+            <div class="module-group">
+                <div class="module-node">M_01<br>SHIFT</div>
+                <div class="module-node">M_02<br>ACT</div>
+                <div class="module-node">M_03<br>ULT</div>
             </div>
         </div>
     </div>
 
     <script>
-        const socket = io();
-        let scene, camera, renderer, myPlayer, loader;
-        let otherPlayers = {}, keys = {};
+        const socket = io("https://thestrongestbattlegroundfiles.onrender.com", {
+            transports: ['polling', 'websocket']
+        });
 
-        let targetCameraAngle = 0;
-        let cameraPitch = 0.3;
-        let isRightMouseDown = false;
+        let scene, camera, renderer, object_node, loader;
+        let remote_nodes = {}, input_state = {};
+        let view_angle = 0, view_pitch = 0.3, is_interacting = false;
+        let zoom_depth = 15;
 
-        let cameraDistance = 15;
-        const minDistance = 0.1;
-        const maxDistance = 40;
-
-        function init() {
+        function init_project() {
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x050505);
             loader = new THREE.GLTFLoader();
@@ -119,124 +100,86 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
 
-            // MOUSE LISTENERS
-            window.addEventListener('mousedown', (e) => { if (e.button === 2) isRightMouseDown = true; });
-            window.addEventListener('mouseup', (e) => { if (e.button === 2) isRightMouseDown = false; });
+            window.addEventListener('mousedown', (e) => { if (e.button === 2) is_interacting = true; });
+            window.addEventListener('mouseup', () => { is_interacting = false; });
             window.addEventListener('mousemove', (e) => {
-                if (isRightMouseDown) {
-                    targetCameraAngle -= e.movementX * 0.005;
-                    cameraPitch += e.movementY * 0.005;
-                    cameraPitch = Math.max(0.1, Math.min(Math.PI / 2.2, cameraPitch));
+                if (is_interacting) {
+                    view_angle -= e.movementX * 0.005;
+                    view_pitch = Math.max(0.1, Math.min(1.4, view_pitch + e.movementY * 0.005));
                 }
             });
-
-            // SCROLL LISTENER (Moved outside mousemove)
             window.addEventListener('wheel', (e) => {
-                cameraDistance += e.deltaY * 0.02;
-                cameraDistance = Math.max(minDistance, Math.min(maxDistance, cameraDistance));
+                zoom_depth = Math.max(0.1, Math.min(40, zoom_depth + e.deltaY * 0.02));
             });
-
             window.addEventListener('contextmenu', e => e.preventDefault());
 
-            // Lighting & Floor
-            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-            const sun = new THREE.DirectionalLight(0xffffff, 1);
-            sun.position.set(5, 10, 7.5);
-            scene.add(sun);
-
-            const floor = new THREE.Mesh(new THREE.CylinderGeometry(50, 52, 2, 8), new THREE.MeshStandardMaterial({ color: 0x222222 }));
-            floor.position.y = -1;
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const floor = new THREE.Mesh(new THREE.CylinderGeometry(50, 50, 1, 32), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+            floor.position.y = -0.5;
             scene.add(floor);
 
-            myPlayer = createCharacter();
+            object_node = new THREE.Group();
+            scene.add(object_node);
 
-            window.onkeydown = e => keys[e.key.toLowerCase()] = true;
-            window.onkeyup = e => keys[e.key.toLowerCase()] = false;
-            window.onmousedown = (e) => { if (e.button === 0) socket.emit('attack'); };
-
-            setupNetwork();
-            animate();
-        }
-
-        function createCharacter() {
-            const group = new THREE.Group();
-            const url = "https://raw.githack.com/ditohdez/TSBCharacter/main/Pikachu%20Blender.glb";
-
-            loader.load(url, (gltf) => {
-                const model = gltf.scene;
-                model.rotation.y = Math.PI;
+            loader.load("https://raw.githack.com/ditohdez/TSBCharacter/main/Pikachu%20Blender.glb", (gltf) => {
+                // model loading code...
                 model.scale.set(2, 2, 2);
-                group.add(model);
-                scene.add(group);
-
-                // Simple shadow circle
-                const shadowGeo = new THREE.CircleGeometry(1, 32);
-                const shadowMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4 });
-                const shadow = new THREE.Mesh(shadowGeo, shadowMat);
-                shadow.rotation.x = -Math.PI / 2; // Lay flat
-                shadow.position.y = -0.9; // Just above the floor
-                group.add(shadow);
+                model.position.y = -1;
+                object_node.add(model);
             });
-            return group;
+
+            window.onkeydown = e => input_state[e.key.toLowerCase()] = true;
+            window.onkeyup = e => input_state[e.key.toLowerCase()] = false;
+
+            run_loop();
         }
 
-        function animate() {
-            requestAnimationFrame(animate);
+        function run_loop() {
+            requestAnimationFrame(run_loop);
+            if (!object_node) return;
 
-            if (!myPlayer || !myPlayer.position) return;
+            let is_moving = false;
+            let mx = 0, mz = 0;
 
-            let moved = false;
-            let moveX = 0, moveZ = 0;
+            if (input_state['w']) { mz -= 0.2; is_moving = true; }
+            if (input_state['s']) { mz += 0.2; is_moving = true; }
+            if (input_state['a']) { mx -= 0.2; is_moving = true; }
+            if (input_state['d']) { mx += 0.2; is_moving = true; }
 
-            // 1. INPUT HANDLING
-            if (keys['w']) { moveZ -= 0.2; moved = true; }
-            if (keys['s']) { moveZ += 0.2; moved = true; }
-            if (keys['a']) { moveX -= 0.2; moved = true; }
-            if (keys['d']) { moveX += 0.2; moved = true; }
+            if (is_moving) {
+                const cx = mx * Math.cos(view_angle) + mz * Math.sin(view_angle);
+                const cz = mz * Math.cos(view_angle) - mx * Math.sin(view_angle);
+                object_node.position.x += cx;
+                object_node.position.z += cz;
+                object_node.rotation.y = Math.atan2(cx, cz) + Math.PI;
 
-            if (moved) {
-                // MOVE RELATIVE TO CAMERA
-                const combinedX = moveX * Math.cos(targetCameraAngle) + moveZ * Math.sin(targetCameraAngle);
-                const combinedZ = moveZ * Math.cos(targetCameraAngle) - moveX * Math.sin(targetCameraAngle);
-
-                myPlayer.position.x += combinedX;
-                myPlayer.position.z += combinedZ;
-
-                const direction = Math.atan2(combinedX, combinedZ);
-                myPlayer.rotation.y = direction + Math.PI;
-
-                socket.emit('playerMovement', { x: myPlayer.position.x, y: myPlayer.position.y, z: myPlayer.position.z, ry: myPlayer.rotation.y });
+                socket.emit('data_update', { x: object_node.position.x, z: object_node.position.z, r: object_node.rotation.y });
             }
 
-            // 2. CAMERA CALCULATION
-            const isFirstPerson = cameraDistance < 2;
-            myPlayer.visible = !isFirstPerson;
+            // Camera System (Now correctly outside the is_moving block)
+            const is_fp = zoom_depth < 2;
+            object_node.visible = !is_fp;
 
-            const camX = myPlayer.position.x + cameraDistance * Math.sin(targetCameraAngle) * Math.cos(cameraPitch);
-            const camY = myPlayer.position.y + cameraDistance * Math.sin(cameraPitch) + (isFirstPerson ? 1.5 : 2);
-            const camZ = myPlayer.position.z + cameraDistance * Math.cos(targetCameraAngle) * Math.cos(cameraPitch);
+            const tx = object_node.position.x + zoom_depth * Math.sin(view_angle) * Math.cos(view_pitch);
+            const ty = object_node.position.y + zoom_depth * Math.sin(view_pitch) + (is_fp ? 1.5 : 2);
+            const tz = object_node.position.z + zoom_depth * Math.cos(view_angle) * Math.cos(view_pitch);
 
-            const targetPos = new THREE.Vector3(camX, camY, camZ);
-            const lerpSpeed = isFirstPerson ? 0.5 : 0.1;
-
-            camera.position.lerp(targetPos, lerpSpeed);
-            camera.lookAt(myPlayer.position.x, myPlayer.position.y + 1.5, myPlayer.position.z);
+            camera.position.lerp(new THREE.Vector3(tx, ty, tz), 0.1);
+            camera.lookAt(object_node.position.x, object_node.position.y + 1.5, object_node.position.z);
 
             renderer.render(scene, camera);
         }
 
-        function setupNetwork() {
-            socket.on('playerMoved', d => {
-                if (d.id === socket.id) {
-                    myPlayer.position.y = d.data.y; // This makes YOUR Pikachu fall on YOUR screen
-                } else if (otherPlayers[d.id]) {
-                    otherPlayers[d.id].position.set(d.data.x, d.data.y, d.data.z);
-                    otherPlayers[d.id].rotation.y = d.data.ry;
-                }
-            });
-        }
+        socket.on('sync_nodes', d => {
+            if (d.id === socket.id) {
+                object_node.position.y = d.data.y;
+            } else if (remote_nodes[d.id]) {
+                remote_nodes[d.id].position.set(d.data.x, d.data.y, d.data.z);
+                remote_nodes[d.id].rotation.y = d.data.r;
+            }
+        });
 
-        init();
+        init_project();
     </script>
 </body>
 </html>
