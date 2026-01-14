@@ -82,7 +82,8 @@
 
     <script>
         const socket = io("https://thestrongestbattlegroundfiles.onrender.com", {
-            transports: ['polling', 'websocket']
+            transports: ['polling'],
+            upgrade: false
         });
 
         let scene, camera, renderer, object_node, loader;
@@ -122,7 +123,7 @@
             scene.add(object_node);
 
             loader.load("https://raw.githack.com/ditohdez/TSBCharacter/main/Pikachu%20Blender.glb", (gltf) => {
-                // model loading code...
+                const model = gltf.scene;
                 model.scale.set(2, 2, 2);
                 model.position.y = -1;
                 object_node.add(model);
@@ -156,7 +157,7 @@
                 socket.emit('data_update', { x: object_node.position.x, z: object_node.position.z, r: object_node.rotation.y });
             }
 
-            // Camera System (Now correctly outside the is_moving block)
+           
             const is_fp = zoom_depth < 2;
             object_node.visible = !is_fp;
 
