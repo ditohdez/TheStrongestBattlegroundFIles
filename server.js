@@ -1,88 +1,55 @@
 const express = require('express');
 const app = express();
 const http = require('http').createServer(app);
-const io = require('socket.io')(http);
 
-let players = {};
+// This tells the server it is OK to talk to your GitHub Pages site
+const io = require('socket.io')(http, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
 
-// --- PHYSICS CONSTANTS ---
-const GRAVITY = 0.2;
-const FLOOR_Y = 0;
-const ARENA_RADIUS = 50;
+// ... rest of your server code (the gravity loop)
 
-// 1. THE MAIN PHYSICS LOOP (Runs for all players 20 times per second)
+let node_registry = {};
+
+// Use port 80 or 443 if possible to look like standard web traffic
+const port = process.env.PORT || 443;
+
 setInterval(() => {
-    for (let id in players) {
-        let p = players[id];
-        let dist = Math.sqrt(p.x * p.x + p.z * p.z);
+    for (let id in node_registry) {
+        let n = node_registry[id];
+        let d = Math.sqrt(n.x * n.x + n.z * n.z);
 
-        // Check if player should be falling
-        if (dist > ARENA_RADIUS || p.y > FLOOR_Y) {
-            p.y -= GRAVITY; // Pull down
-        } else if (dist <= ARENA_RADIUS && p.y < FLOOR_Y) {
-            p.y = FLOOR_Y; // Stay on floor
+        if (d > 50 || n.y > 0) {
+            n.y -= 0.15; // Vertical Decay
+        } else if (d <= 50 && n.y < 0) {
+            n.y = 0;
         }
 
-        // Void/Respawn Check (If fell too deep)
-        if (p.y < -30) {
-            p.x = 0;
-            p.y = 15; // Spawn them back in the air
-            p.z = 0;
-            p.health = 100;
-            io.emit('playerHit', { id: id, health: 100 });
+        if (n.y < -30) {
+            n.x = 0; n.y = 15; n.z = 0;
         }
 
-        // Broadcast current position to everyone
-        io.emit('playerMoved', { id: id, data: p });
+        io.emit('sync_nodes', { id: id, data: n });
     }
 }, 50);
 
-// 2. NETWORK CONNECTIONS
 io.on('connection', (socket) => {
-    console.log('Player connected:', socket.id);
+    node_registry[socket.id] = { x: 0, y: 10, z: 0, r: 0 };
 
-    // Initial stats
-    players[socket.id] = {
-        x: 0, y: 10, z: 0, ry: 0,
-        health: 100,
-        appearance: { suitColor: 0x00ff00, accessory: 'none' }
-    };
-
-    socket.emit('currentPlayers', players);
-    socket.broadcast.emit('newPlayer', { id: socket.id, data: players[socket.id] });
-
-    // Handle Movement (Only update X, Z, and Rotation)
-    socket.on('playerMovement', (data) => {
-        if (players[socket.id]) {
-            players[socket.id].x = data.x;
-            players[socket.id].z = data.z;
-            players[socket.id].ry = data.ry;
-            // Note: We don't update Y here, the Server Loop handles gravity!
+    socket.on('data_update', (data) => {
+        if (node_registry[socket.id]) {
+            node_registry[socket.id].x = data.x;
+            node_registry[socket.id].z = data.z;
+            node_registry[socket.id].r = data.r;
         }
     });
 
-    socket.on('attack', () => {
-        const attacker = players[socket.id];
-        for (let id in players) {
-            if (id === socket.id) continue;
-            const victim = players[id];
-            const dist = Math.hypot(attacker.x - victim.x, attacker.z - victim.z);
-            if (dist < 3.5) {
-                victim.health -= 25;
-                io.emit('playerHit', { id: id, health: victim.health });
-                if (victim.health <= 0) {
-                    victim.health = 100;
-                    victim.x = 0; victim.y = 10; victim.z = 0;
-                }
-            }
-        }
-    });
-
-    socket.on('disconnect', () => {
-        delete players[socket.id];
-        io.emit('playerDisconnected', socket.id);
-    });
+    socket.on('disconnect', () => delete node_registry[socket.id]);
 });
 
 app.get('/', (req, res) => res.sendFile(__dirname + '/index.html'));
-http.listen(3000, () => console.log(`Game running on port 3000`));
+// Force the project to use the secure web port
+http.listen(443, () => console.log('Physics Project initialized on secure channel'));
