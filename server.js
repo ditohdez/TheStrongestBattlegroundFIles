@@ -2,7 +2,6 @@ const express = require('express');
 const app = express();
 const http = require('http').createServer(app);
 
-// This tells the server it is OK to talk to your GitHub Pages site
 const io = require('socket.io')(http, {
     cors: {
         origin: "*",
@@ -10,28 +9,21 @@ const io = require('socket.io')(http, {
     }
 });
 
-// ... rest of your server code (the gravity loop)
-
 let node_registry = {};
-
-// Use port 80 or 443 if possible to look like standard web traffic
-const port = process.env.PORT || 443;
+const port = process.env.PORT || 10000;
 
 setInterval(() => {
     for (let id in node_registry) {
         let n = node_registry[id];
         let d = Math.sqrt(n.x * n.x + n.z * n.z);
-
         if (d > 50 || n.y > 0) {
-            n.y -= 0.15; // Vertical Decay
+            n.y -= 0.15;
         } else if (d <= 50 && n.y < 0) {
             n.y = 0;
         }
-
         if (n.y < -30) {
             n.x = 0; n.y = 15; n.z = 0;
         }
-
         io.emit('sync_nodes', { id: id, data: n });
     }
 }, 50);
@@ -48,10 +40,13 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-    delete node_registry[socket.id];
-    io.emit('player_left', socket.id); 
+        delete node_registry[socket.id];
+        io.emit('player_left', socket.id);
+    });
 });
 
-app.get('/', (req, res) => res.sendFile(__dirname + '/index.html'));
-// Force the project to use the secure web port
-http.listen(443, () => console.log('Physics Project initialized on secure channel'));
+app.get('/', (req, res) => res.send('Server is Running'));
+
+http.listen(port, () => {
+    console.log('Server live on port ' + port);
+});
