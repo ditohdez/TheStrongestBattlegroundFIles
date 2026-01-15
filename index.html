@@ -81,106 +81,127 @@
     </div>
 
     <script>
-        const socket = io("https://thestrongestbattlegroundfiles.onrender.com", {
-            transports: ['polling'],
-            upgrade: false
+    const socket = io("https://thestrongestbattlegroundfiles.onrender.com", {
+        transports: ['polling'],
+        upgrade: false
+    });
+
+    let scene, camera, renderer, object_node, loader;
+    let remote_nodes = {}, input_state = {};
+    let view_angle = 0, view_pitch = 0.3, is_interacting = false;
+    let zoom_depth = 15;
+
+    function init_project() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050505);
+        loader = new THREE.GLTFLoader();
+
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        const floor = new THREE.Mesh(new THREE.CylinderGeometry(50, 50, 1, 32), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+        floor.position.y = -0.5;
+        scene.add(floor);
+
+        object_node = new THREE.Group();
+        scene.add(object_node);
+        
+        loader.load("https://raw.githack.com/ditohdez/TSBCharacter/main/Pikachu%20Blender.glb", (gltf) => {
+            const model = gltf.scene;
+            model.scale.set(2, 2, 2);
+            model.position.y = -1;
+            object_node.add(model);
         });
 
-        let scene, camera, renderer, object_node, loader;
-        let remote_nodes = {}, input_state = {};
-        let view_angle = 0, view_pitch = 0.3, is_interacting = false;
-        let zoom_depth = 15;
-
-        function init_project() {
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x050505);
-            loader = new THREE.GLTFLoader();
-
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            document.body.appendChild(renderer.domElement);
-
-            window.addEventListener('mousedown', (e) => { if (e.button === 2) is_interacting = true; });
-            window.addEventListener('mouseup', () => { is_interacting = false; });
-            window.addEventListener('mousemove', (e) => {
-                if (is_interacting) {
-                    view_angle -= e.movementX * 0.005;
-                    view_pitch = Math.max(0.1, Math.min(1.4, view_pitch + e.movementY * 0.005));
-                }
-            });
-            window.addEventListener('wheel', (e) => {
-                zoom_depth = Math.max(0.1, Math.min(40, zoom_depth + e.deltaY * 0.02));
-            });
-            window.addEventListener('contextmenu', e => e.preventDefault());
-
-            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
-            const floor = new THREE.Mesh(new THREE.CylinderGeometry(50, 50, 1, 32), new THREE.MeshStandardMaterial({ color: 0x111111 }));
-            floor.position.y = -0.5;
-            scene.add(floor);
-
-            object_node = new THREE.Group();
-            scene.add(object_node);
-
-            loader.load("https://raw.githack.com/ditohdez/TSBCharacter/main/Pikachu%20Blender.glb", (gltf) => {
-                const model = gltf.scene;
-                model.scale.set(2, 2, 2);
-                model.position.y = -1;
-                object_node.add(model);
-            });
-
-            window.onkeydown = e => input_state[e.key.toLowerCase()] = true;
-            window.onkeyup = e => input_state[e.key.toLowerCase()] = false;
-
-            run_loop();
-        }
-
-        function run_loop() {
-            requestAnimationFrame(run_loop);
-            if (!object_node) return;
-
-            let is_moving = false;
-            let mx = 0, mz = 0;
-
-            if (input_state['w']) { mz -= 0.2; is_moving = true; }
-            if (input_state['s']) { mz += 0.2; is_moving = true; }
-            if (input_state['a']) { mx -= 0.2; is_moving = true; }
-            if (input_state['d']) { mx += 0.2; is_moving = true; }
-
-            if (is_moving) {
-                const cx = mx * Math.cos(view_angle) + mz * Math.sin(view_angle);
-                const cz = mz * Math.cos(view_angle) - mx * Math.sin(view_angle);
-                object_node.position.x += cx;
-                object_node.position.z += cz;
-                object_node.rotation.y = Math.atan2(cx, cz) + Math.PI;
-
-                socket.emit('data_update', { x: object_node.position.x, z: object_node.position.z, r: object_node.rotation.y });
-            }
-
-           
-            const is_fp = zoom_depth < 2;
-            object_node.visible = !is_fp;
-
-            const tx = object_node.position.x + zoom_depth * Math.sin(view_angle) * Math.cos(view_pitch);
-            const ty = object_node.position.y + zoom_depth * Math.sin(view_pitch) + (is_fp ? 1.5 : 2);
-            const tz = object_node.position.z + zoom_depth * Math.cos(view_angle) * Math.cos(view_pitch);
-
-            camera.position.lerp(new THREE.Vector3(tx, ty, tz), 0.1);
-            camera.lookAt(object_node.position.x, object_node.position.y + 1.5, object_node.position.z);
-
-            renderer.render(scene, camera);
-        }
-
-        socket.on('sync_nodes', d => {
-            if (d.id === socket.id) {
-                object_node.position.y = d.data.y;
-            } else if (remote_nodes[d.id]) {
-                remote_nodes[d.id].position.set(d.data.x, d.data.y, d.data.z);
-                remote_nodes[d.id].rotation.y = d.data.r;
+        window.addEventListener('mousedown', (e) => { if (e.button === 2) is_interacting = true; });
+        window.addEventListener('mouseup', () => { is_interacting = false; });
+        window.addEventListener('mousemove', (e) => {
+            if (is_interacting) {
+                view_angle -= e.movementX * 0.005;
+                view_pitch = Math.max(0.1, Math.min(1.4, view_pitch + e.movementY * 0.005));
             }
         });
+        window.addEventListener('wheel', (e) => {
+            zoom_depth = Math.max(0.1, Math.min(40, zoom_depth + e.deltaY * 0.02));
+        });
+        window.addEventListener('contextmenu', e => e.preventDefault());
 
-        init_project();
-    </script>
+        window.onkeydown = e => input_state[e.key.toLowerCase()] = true;
+        window.onkeyup = e => input_state[e.key.toLowerCase()] = false;
+
+        run_loop();
+    }
+
+    function create_remote_node(id) {
+        const group = new THREE.Group();
+        scene.add(group);
+        
+        loader.load("https://raw.githack.com/ditohdez/TSBCharacter/main/Pikachu%20Blender.glb", (gltf) => {
+            const model = gltf.scene;
+            model.scale.set(2, 2, 2);
+            model.position.y = -1;
+            group.add(model);
+        });
+        
+        remote_nodes[id] = group;
+    }
+
+    function run_loop() {
+        requestAnimationFrame(run_loop);
+        if (!object_node) return;
+
+        let is_moving = false;
+        let mx = 0, mz = 0;
+
+        if (input_state['w']) { mz -= 0.2; is_moving = true; }
+        if (input_state['s']) { mz += 0.2; is_moving = true; }
+        if (input_state['a']) { mx -= 0.2; is_moving = true; }
+        if (input_state['d']) { mx += 0.2; is_moving = true; }
+
+        if (is_moving) {
+            const cx = mx * Math.cos(view_angle) + mz * Math.sin(view_angle);
+            const cz = mz * Math.cos(view_angle) - mx * Math.sin(view_angle);
+            object_node.position.x += cx;
+            object_node.position.z += cz;
+            object_node.rotation.y = Math.atan2(cx, cz) + Math.PI;
+
+            socket.emit('data_update', { x: object_node.position.x, z: object_node.position.z, r: object_node.rotation.y });
+        }
+
+        const is_fp = zoom_depth < 2;
+        object_node.visible = !is_fp;
+        const tx = object_node.position.x + zoom_depth * Math.sin(view_angle) * Math.cos(view_pitch);
+        const ty = object_node.position.y + zoom_depth * Math.sin(view_pitch) + (is_fp ? 1.5 : 2);
+        const tz = object_node.position.z + zoom_depth * Math.cos(view_angle) * Math.cos(view_pitch);
+        camera.position.lerp(new THREE.Vector3(tx, ty, tz), 0.1);
+        camera.lookAt(object_node.position.x, object_node.position.y + 1.5, object_node.position.z);
+
+        renderer.render(scene, camera);
+    }
+
+    socket.on('sync_nodes', d => {
+        if (d.id === socket.id) {
+            object_node.position.y = d.data.y;
+        } else {
+            if (!remote_nodes[d.id]) {
+                create_remote_node(d.id);
+            }
+            remote_nodes[d.id].position.set(d.data.x, d.data.y, d.data.z);
+            remote_nodes[d.id].rotation.y = d.data.r;
+        }
+    });
+
+    socket.on('player_left', id => {
+        if (remote_nodes[id]) {
+            scene.remove(remote_nodes[id]);
+            delete remote_nodes[id];
+        }
+    });
+
+    init_project();
+</script>
 </body>
 </html>
