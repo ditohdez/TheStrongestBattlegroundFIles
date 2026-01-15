@@ -47,7 +47,9 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('disconnect', () => delete node_registry[socket.id]);
+    socket.on('disconnect', () => {
+    delete node_registry[socket.id];
+    io.emit('player_left', socket.id); 
 });
 
 app.get('/', (req, res) => res.sendFile(__dirname + '/index.html'));
